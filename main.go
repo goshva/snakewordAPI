@@ -30,7 +30,7 @@ var usersMutex = &sync.Mutex{}
 
 func main() {
     http.HandleFunc("/ws", handleConnections)
-    log.Fatal(http.ListenAndServe(":8080", nil))
+    log.Fatal(http.ListenAndServe(":6969", nil))
 }
 
 func handleConnections(w http.ResponseWriter, r *http.Request) {
