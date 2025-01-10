@@ -1,43 +1,96 @@
-
 package main
 
 import (
-	"os"
-	"log"
-"github.com/joho/godotenv"
+    "log"
+    "net/http"
+    "sync"
 
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+    "github.com/gorilla/websocket"
 )
 
-func main() {
-	err := godotenv.Load()
-	if err != nil {
-		log.Fatalf("Error loading .env file: %v", err)
-	}
-	botToken := os.Getenv("TELEGRAM_BOT_TOKEN")
-
-	bot, err := tgbotapi.NewBotAPI(botToken)
-	if err != nil {
-		log.Panic(err)
-	}
-
-	// Replace with the chat ID to send the message
-	chatID := int64(190404167)
-
-	// Create the InlineKeyboardMarkup with the web app button
-	webAppButton := tgbotapi.NewInlineKeyboardButtonURL("Запустить SnakeWord", "https://snakeword.ru/")
-	keyboard := tgbotapi.NewInlineKeyboardMarkup(
-		tgbotapi.NewInlineKeyboardRow(webAppButton),
-	)
-
-	// Create the message
-	message := tgbotapi.NewMessage(chatID, "Играй в SnakeWord прямо сейчас!")
-	message.ReplyMarkup = keyboard
-
-	// Send the message
-	if _, err := bot.Send(message); err != nil {
-		log.Panic(err)
-	}
+var upgrader = websocket.Upgrader{
+    ReadBufferSize:  1024,
+    WriteBufferSize: 1024,
+    CheckOrigin: func(r *http.Request) bool {
+        return true
+    },
 }
 
+type User struct {
+    Tgid  int `json:"tgid"`
+    Score int `json:"score"`
+}
 
+var users = []User{
+    {Tgid: 190404167, Score: 10000},
+    {Tgid: 190404169, Score: 1000},
+}
+
+var usersMutex = &sync.Mutex{}
+
+func main() {
+    http.HandleFunc("/ws", handleConnections)
+    log.Fatal(http.ListenAndServe(":8080", nil))
+}
+
+func handleConnections(w http.ResponseWriter, r *http.Request) {
+    conn, err := upgrader.Upgrade(w, r, nil)
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer conn.Close()
+
+    for {
+        var msg map[string]interface{}
+        err := conn.ReadJSON(&msg)
+        if err != nil {
+            log.Printf("error: %v", err)
+            break
+        }
+
+        action := msg["action"].(string)
+        userId := int(msg["userId"].(float64))
+
+        switch action {
+        case "searchUser":
+            handleSearchUser(conn, userId)
+        case "createUser":
+            handleCreateUser(conn, userId)
+        default:
+            log.Printf("unknown action: %s", action)
+        }
+    }
+}
+
+func handleSearchUser(conn *websocket.Conn, userId int) {
+    usersMutex.Lock()
+    defer usersMutex.Unlock()
+
+    for _, user := range users {
+        if user.Tgid == userId {
+            err := conn.WriteJSON(user)
+            if err != nil {
+                log.Printf("error: %v", err)
+            }
+            return
+        }
+    }
+
+    err := conn.WriteJSON(map[string]string{"error": "User not found"})
+    if err != nil {
+        log.Printf("error: %v", err)
+    }
+}
+
+func handleCreateUser(conn *websocket.Conn, userId int) {
+    usersMutex.Lock()
+    defer usersMutex.Unlock()
+
+    newUser := User{Tgid: userId, Score: 0}
+    users = append(users, newUser)
+
+    err := conn.WriteJSON(newUser)
+    if err != nil {
+        log.Printf("error: %v", err)
+    }
+}
